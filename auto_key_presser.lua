@@ -1,7 +1,6 @@
 local timer = nil
 local settings = {key="a", count=0, interval=1, unit="seconds", app="TextEdit"}
 local pressesDone = 0
-local paused = false
 local pollTimer = nil
 
 -- Convert interval to seconds
@@ -13,7 +12,6 @@ local function intervalToSeconds()
 end
 
 local function pressKey()
-    if paused then return end
     if settings.count>0 and pressesDone>=settings.count then
         if timer then timer:stop() end
         timer=nil
@@ -28,7 +26,6 @@ end
 local function startPressing()
     if timer then timer:stop() end
     pressesDone=0
-    paused=false
     timer=hs.timer.doEvery(intervalToSeconds(), pressKey)
     webview:evaluateJavaScript("document.getElementById('status').innerText='Running'")
 end
@@ -36,7 +33,6 @@ end
 local function stopPressing()
     if timer then timer:stop() end
     timer=nil
-    paused=false
     webview:evaluateJavaScript("document.getElementById('status').innerText='Stopped'")
 end
 
@@ -186,6 +182,7 @@ input[type="number"], select {
     appearance: none; /* Makes select cleaner */
 }
 
+
 .button-group {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -207,7 +204,6 @@ button {
     justify-content: center;
     gap: 8px;
     flex-direction: column;
-    text-align: center;
 }
 
 .btn-start {
@@ -238,7 +234,7 @@ button:active {
 .keybind {
     font-size: 11px;
     opacity: 0.8;
-    margin-top: 4px;
+    margin-top: 2px;
 }
 
 .status-container {
@@ -263,10 +259,6 @@ button:active {
 
 .status.running {
     color: #56ab2f;
-}
-
-.status.paused {
-    color: #f5576c;
 }
 
 .status.stopped {
@@ -317,15 +309,15 @@ input[type="number"]::placeholder {
     <div class="button-group">
         <button class="btn-start" onclick="window.buttonClicked='start'; console.log('Start clicked')">
             ▶️ Start
-            <div class="keybind">⌘⇧S</div>
+            <span class="keybind">Ctrl+Shift+S</span>
         </button>
         <button class="btn-stop" onclick="window.buttonClicked='stop'; console.log('Stop clicked')">
             ⏹️ Stop
-            <div class="keybind">⌘⇧X</div>
+            <span class="keybind">Ctrl+Shift+S</span>
         </button>
         <button class="btn-close" onclick="window.buttonClicked='close'; console.log('Close clicked')">
             ❌ Close
-            <div class="keybind">⌘⇧Q</div>
+            <span class="keybind">Cmd+Shift+K</span>
         </button>
     </div>
     
