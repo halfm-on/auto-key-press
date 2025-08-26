@@ -17,12 +17,15 @@ local function pressKey()
     if settings.count>0 and pressesDone>=settings.count then
         if timer then timer:stop() end
         timer=nil
-        webview:evaluateJavaScript("document.getElementById('status').innerText='Stopped (done)'")
+        if webview then webview:evaluateJavaScript("document.getElementById('status').innerText='Stopped (done)'") end
+        print("[DEBUG] Reached target count; stopped timer")
         return
     end
     local app = settings.app and settings.app ~= "" and hs.application.find(settings.app) or hs.application.frontmostApplication()
+    print("[DEBUG] Pressing key:", settings.key, "target app:", settings.app ~= "" and settings.app or "frontmost")
     hs.eventtap.keyStroke({}, settings.key, 0, app)
     pressesDone = pressesDone + 1
+    print("[DEBUG] pressesDone=", pressesDone)
 end
 
 local function startPressing()
@@ -30,28 +33,75 @@ local function startPressing()
     pressesDone=0
     paused=false
     timer=hs.timer.doEvery(intervalToSeconds(), pressKey)
-    webview:evaluateJavaScript("document.getElementById('status').innerText='Running'")
+    if webview then 
+        webview:evaluateJavaScript("document.getElementById('status').innerText='Running'")
+        webview:evaluateJavaScript("document.getElementById('toggleBtn').innerText='⏹️ Stop (Ctrl+Shift+S)'")
+        webview:evaluateJavaScript("document.getElementById('toggleBtn').className='btn-toggle running'")
+    end
+    print("[DEBUG] Started autoclicker with interval(s)=", intervalToSeconds())
 end
 
 local function stopPressing()
     if timer then timer:stop() end
     timer=nil
     paused=false
-    webview:evaluateJavaScript("document.getElementById('status').innerText='Stopped'")
+    if webview then 
+        webview:evaluateJavaScript("document.getElementById('status').innerText='Stopped'")
+        webview:evaluateJavaScript("document.getElementById('toggleBtn').innerText='▶️ Start (Ctrl+Shift+S)'")
+        webview:evaluateJavaScript("document.getElementById('toggleBtn').className='btn-toggle'")
+    end
+    print("[DEBUG] Stopped autoclicker")
 end
 
 local function togglePause()
     if not timer then return end
     paused = not paused
     if paused then
-        webview:evaluateJavaScript("document.getElementById('status').innerText='Paused'")
+        if webview then webview:evaluateJavaScript("document.getElementById('status').innerText='Paused'") end
+        print("[DEBUG] Paused autoclicker")
     else
-        webview:evaluateJavaScript("document.getElementById('status').innerText='Running'")
+        if webview then webview:evaluateJavaScript("document.getElementById('status').innerText='Running'") end
+        print("[DEBUG] Resumed autoclicker")
     end
+end
+
+-- Function to get list of open applications
+local function getOpenApplications()
+    local apps = {}
+    local runningApps = hs.application.runningApplications()
+    
+    for _, app in pairs(runningApps) do
+        if app:name() then
+            table.insert(apps, app:name())
+        end
+    end
+    
+    -- Sort alphabetically
+    table.sort(apps)
+    return apps
+end
+
+-- Function to populate app dropdown
+local function populateAppDropdown()
+    if not webview then return end
+    
+    local openApps = getOpenApplications()
+    local options = '<option value="">Frontmost App</option>'
+    
+    for _, appName in ipairs(openApps) do
+        local selected = (appName == settings.app) and ' selected' or ''
+        options = options .. '<option value="' .. appName .. '"' .. selected .. '>' .. appName .. '</option>'
+    end
+    
+    webview:evaluateJavaScript([[
+        var appSelect = document.getElementById('app');
+        appSelect.innerHTML = ']] .. options .. [[';
+    ]])
 end
 
 -- Function to save settings
 local function saveSettings()
+    print("[DEBUG] Saving settings (manual or auto)")
     webview:evaluateJavaScript([[
         JSON.stringify({
             key: document.getElementById('key').value,
@@ -68,17 +118,17 @@ local function saveSettings()
             settings.interval = tonumber(data.interval) or 1
             settings.unit = data.unit or "seconds"
             settings.app = data.app or ""
-            print("Settings auto-saved:", "key=" .. settings.key, "count=" .. settings.count, "interval=" .. settings.interval, "unit=" .. settings.unit, "app=" .. settings.app)
-            webview:evaluateJavaScript("document.getElementById('status').innerText='Settings Auto-Saved'")
+            print("[DEBUG] Settings saved:", "key=" .. settings.key, "count=" .. settings.count, "interval=" .. settings.interval, "unit=" .. settings.unit, "app=" .. settings.app)
+            if webview then webview:evaluateJavaScript("document.getElementById('status').innerText='Settings Auto-Saved'") end
             
             -- If currently running, restart with new interval
             if timer then
                 timer:stop()
                 timer = hs.timer.doEvery(intervalToSeconds(), pressKey)
-                print("Updated running timer with new interval:", intervalToSeconds())
+                print("[DEBUG] Updated running timer with new interval(s)=", intervalToSeconds())
             end
         else
-            print("Error parsing settings JSON")
+            print("[DEBUG] Error parsing settings JSON")
         end
     end)
 end
@@ -89,24 +139,18 @@ local function checkButtonClicks()
     
     webview:evaluateJavaScript("window.buttonClicked || ''", function(result)
         if result and result ~= "" then
-            print("Button clicked:", result)
+            print("[DEBUG] Button clicked:", result)
             -- Clear the flag
             webview:evaluateJavaScript("window.buttonClicked = ''")
             
-            if result == "save" then
-                saveSettings()
-            elseif result == "start" then 
-                startPressing()
-            elseif result == "stop" then 
-                stopPressing()
-            elseif result == "toggle" then 
-                togglePause()
-            elseif result == "close" then 
-                stopPressing()
-                if pollTimer then pollTimer:stop() end
-                webview:delete()
-                webview = nil
-                pollTimer = nil
+            if result == "toggle" then 
+                if timer then
+                    stopPressing()
+                else
+                    startPressing()
+                end
+            elseif result == "refresh" then
+                populateAppDropdown()
             end
         end
     end)
@@ -124,22 +168,16 @@ body {
     font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', Helvetica, Arial, sans-serif; 
     padding: 0;
     margin: 0;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: #f8f9fa;
     min-height: 100vh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
 }
 
 .container {
-    background: rgba(255, 255, 255, 0.95);
-    backdrop-filter: blur(10px);
-    border-radius: 20px;
+    background: white;
     padding: 30px;
-    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
     width: 100%;
-    max-width: 400px;
-    border: 1px solid rgba(255, 255, 255, 0.2);
+    height: 100vh;
+    box-sizing: border-box;
 }
 
 h2 {
@@ -200,8 +238,8 @@ input[type="number"], select {
 
 
 .button-group {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
+    display: flex;
+    flex-direction: column;
     gap: 10px;
     margin-top: 25px;
     margin-bottom: 20px;
@@ -221,30 +259,13 @@ button {
     gap: 8px;
 }
 
-.btn-save {
-    background: linear-gradient(135deg, #667eea, #764ba2);
-    color: white;
-}
-
-.btn-start {
-    background: linear-gradient(135deg, #56ab2f, #a8e6cf);
-    color: white;
-}
-
 .btn-toggle {
-    background: linear-gradient(135deg, #f093fb, #f5576c);
+    background: linear-gradient(135deg, #868e96, #6c757d);
     color: white;
 }
 
-.btn-stop {
-    background: linear-gradient(135deg, #ff6b6b, #ee5a24);
-    color: white;
-}
-
-.btn-close {
-    background: linear-gradient(135deg, #757f9a, #d7dde8);
-    color: #2c3e50;
-    grid-column: span 2;
+.btn-toggle.running {
+    background: linear-gradient(135deg, #6c757d, #495057);
 }
 
 button:hover {
@@ -326,15 +347,17 @@ input[type="number"]::placeholder {
     
     <div class="form-group">
         <label for="app">Target Application</label>
-        <input type="text" id="app" value="TextEdit" placeholder="Leave empty for frontmost app">
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <select id="app" style="flex: 1;">
+                <option value="">Frontmost App</option>
+                <option value="TextEdit" selected>TextEdit</option>
+            </select>
+            <button onclick="window.buttonClicked='refresh'; console.log('Refresh clicked')" style="padding: 8px 12px; background: #6c757d; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 12px;">🔄</button>
+        </div>
     </div>
     
     <div class="button-group">
-        <button class="btn-save" onclick="window.buttonClicked='save'; console.log('Save clicked')">💾 Save</button>
-        <button class="btn-start" onclick="window.buttonClicked='start'; console.log('Start clicked')">▶️ Start</button>
-        <button class="btn-toggle" onclick="window.buttonClicked='toggle'; console.log('Toggle clicked')">⏯️ Toggle</button>
-        <button class="btn-stop" onclick="window.buttonClicked='stop'; console.log('Stop clicked')">⏹️ Stop</button>
-        <button class="btn-close" onclick="window.buttonClicked='close'; console.log('Close clicked')">❌ Close</button>
+        <button class="btn-toggle" id="toggleBtn" onclick="window.buttonClicked='toggle'; console.log('Toggle clicked')">▶️ Start (Ctrl+Shift+S)</button>
     </div>
     
     <div class="status-container">
@@ -399,17 +422,24 @@ webview = hs.webview.new({x=200,y=200,w=480,h=580})
     :level(hs.drawing.windowLevels.normal)
     -- :behaviorAsLabels({"canJoinAllSpaces"}) --> makes it appear on all spaces
     :show()
+print("[DEBUG] Webview created and shown")
+
+-- Populate app dropdown after webview is created
+hs.timer.doAfter(0.1, populateAppDropdown)
 
 -- Start polling for button clicks every 100ms
 pollTimer = hs.timer.doEvery(0.1, checkButtonClicks)
+print("[DEBUG] Poll timer started (100ms)")
 
 -- Keybind functions
 local function toggleWindow()
     if webview and webview:isVisible() then
         webview:hide()
+        print("[DEBUG] Window hidden via hotkey")
     else
         if webview then
             webview:show()
+            print("[DEBUG] Window shown via hotkey")
         else
             -- Recreate webview if it was closed
             webview = hs.webview.new({x=200,y=200,w=480,h=580})
@@ -419,30 +449,22 @@ local function toggleWindow()
                 :html(html)
                 :level(hs.drawing.windowLevels.normal)
                 :show()
+            print("[DEBUG] Webview recreated and shown via hotkey")
             pollTimer = hs.timer.doEvery(0.1, checkButtonClicks)
+            print("[DEBUG] Poll timer restarted (100ms)")
+            hs.timer.doAfter(0.1, populateAppDropdown)
         end
     end
 end
 
-local function closeWindow()
-    if webview then
+-- Toggle autoclicker with a single hotkey (works even if GUI is closed)
+local function toggleAutoclickerHotkey()
+    if timer then
+        print("[DEBUG] Hotkey: toggling OFF")
         stopPressing()
-        if pollTimer then pollTimer:stop() end
-        webview:delete()
-        webview = nil
-        pollTimer = nil
-    end
-end
-
-local function startWithKeybind()
-    if webview and webview:isVisible() then
+    else
+        print("[DEBUG] Hotkey: toggling ON")
         startPressing()
-    end
-end
-
-local function stopWithKeybind()
-    if webview and webview:isVisible() then
-        stopPressing()
     end
 end
 
@@ -450,17 +472,9 @@ end
 -- Cmd+Shift+K to toggle the window
 hs.hotkey.bind({"cmd", "shift"}, "K", toggleWindow)
 
--- Cmd+Shift+Q to close the window
-hs.hotkey.bind({"cmd", "shift"}, "Q", closeWindow)
-
--- Cmd+Shift+S to start the autoclicker
-hs.hotkey.bind({"cmd", "shift"}, "S", startWithKeybind)
-
--- Cmd+Shift+X to stop the autoclicker
-hs.hotkey.bind({"cmd", "shift"}, "X", stopWithKeybind)
+-- Ctrl+Shift+S to toggle the autoclicker
+hs.hotkey.bind({"ctrl", "shift"}, "S", toggleAutoclickerHotkey)
 
 print("Auto Key Presser loaded with keybinds:")
 print("  Cmd+Shift+K: Toggle window")
-print("  Cmd+Shift+Q: Close window")
-print("  Cmd+Shift+S: Start autoclicker")
-print("  Cmd+Shift+X: Stop autoclicker")
+print("  Ctrl+Shift+S: Toggle autoclicker ON/OFF")
