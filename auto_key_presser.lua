@@ -17,12 +17,15 @@ local function pressKey()
     if settings.count>0 and pressesDone>=settings.count then
         if timer then timer:stop() end
         timer=nil
-        webview:evaluateJavaScript("document.getElementById('status').innerText='Stopped (done)'")
+        if webview then webview:evaluateJavaScript("document.getElementById('status').innerText='Stopped (done)'") end
+        print("[DEBUG] Reached target count; stopped timer")
         return
     end
     local app = settings.app and settings.app ~= "" and hs.application.find(settings.app) or hs.application.frontmostApplication()
+    print("[DEBUG] Pressing key:", settings.key, "target app:", settings.app ~= "" and settings.app or "frontmost")
     hs.eventtap.keyStroke({}, settings.key, 0, app)
     pressesDone = pressesDone + 1
+    print("[DEBUG] pressesDone=", pressesDone)
 end
 
 local function startPressing()
@@ -30,28 +33,33 @@ local function startPressing()
     pressesDone=0
     paused=false
     timer=hs.timer.doEvery(intervalToSeconds(), pressKey)
-    webview:evaluateJavaScript("document.getElementById('status').innerText='Running'")
+    if webview then webview:evaluateJavaScript("document.getElementById('status').innerText='Running'") end
+    print("[DEBUG] Started autoclicker with interval(s)=", intervalToSeconds())
 end
 
 local function stopPressing()
     if timer then timer:stop() end
     timer=nil
     paused=false
-    webview:evaluateJavaScript("document.getElementById('status').innerText='Stopped'")
+    if webview then webview:evaluateJavaScript("document.getElementById('status').innerText='Stopped'") end
+    print("[DEBUG] Stopped autoclicker")
 end
 
 local function togglePause()
     if not timer then return end
     paused = not paused
     if paused then
-        webview:evaluateJavaScript("document.getElementById('status').innerText='Paused'")
+        if webview then webview:evaluateJavaScript("document.getElementById('status').innerText='Paused'") end
+        print("[DEBUG] Paused autoclicker")
     else
-        webview:evaluateJavaScript("document.getElementById('status').innerText='Running'")
+        if webview then webview:evaluateJavaScript("document.getElementById('status').innerText='Running'") end
+        print("[DEBUG] Resumed autoclicker")
     end
 end
 
 -- Function to save settings
 local function saveSettings()
+    print("[DEBUG] Saving settings (manual or auto)")
     webview:evaluateJavaScript([[
         JSON.stringify({
             key: document.getElementById('key').value,
@@ -68,17 +76,17 @@ local function saveSettings()
             settings.interval = tonumber(data.interval) or 1
             settings.unit = data.unit or "seconds"
             settings.app = data.app or ""
-            print("Settings auto-saved:", "key=" .. settings.key, "count=" .. settings.count, "interval=" .. settings.interval, "unit=" .. settings.unit, "app=" .. settings.app)
-            webview:evaluateJavaScript("document.getElementById('status').innerText='Settings Auto-Saved'")
+            print("[DEBUG] Settings saved:", "key=" .. settings.key, "count=" .. settings.count, "interval=" .. settings.interval, "unit=" .. settings.unit, "app=" .. settings.app)
+            if webview then webview:evaluateJavaScript("document.getElementById('status').innerText='Settings Auto-Saved'") end
             
             -- If currently running, restart with new interval
             if timer then
                 timer:stop()
                 timer = hs.timer.doEvery(intervalToSeconds(), pressKey)
-                print("Updated running timer with new interval:", intervalToSeconds())
+                print("[DEBUG] Updated running timer with new interval(s)=", intervalToSeconds())
             end
         else
-            print("Error parsing settings JSON")
+            print("[DEBUG] Error parsing settings JSON")
         end
     end)
 end
@@ -89,7 +97,7 @@ local function checkButtonClicks()
     
     webview:evaluateJavaScript("window.buttonClicked || ''", function(result)
         if result and result ~= "" then
-            print("Button clicked:", result)
+            print("[DEBUG] Button clicked:", result)
             -- Clear the flag
             webview:evaluateJavaScript("window.buttonClicked = ''")
             
@@ -107,6 +115,7 @@ local function checkButtonClicks()
                 webview:delete()
                 webview = nil
                 pollTimer = nil
+                print("[DEBUG] Window closed via button")
             end
         end
     end)
@@ -399,17 +408,21 @@ webview = hs.webview.new({x=200,y=200,w=480,h=580})
     :level(hs.drawing.windowLevels.normal)
     -- :behaviorAsLabels({"canJoinAllSpaces"}) --> makes it appear on all spaces
     :show()
+print("[DEBUG] Webview created and shown")
 
 -- Start polling for button clicks every 100ms
 pollTimer = hs.timer.doEvery(0.1, checkButtonClicks)
+print("[DEBUG] Poll timer started (100ms)")
 
 -- Keybind functions
 local function toggleWindow()
     if webview and webview:isVisible() then
         webview:hide()
+        print("[DEBUG] Window hidden via hotkey")
     else
         if webview then
             webview:show()
+            print("[DEBUG] Window shown via hotkey")
         else
             -- Recreate webview if it was closed
             webview = hs.webview.new({x=200,y=200,w=480,h=580})
@@ -419,30 +432,21 @@ local function toggleWindow()
                 :html(html)
                 :level(hs.drawing.windowLevels.normal)
                 :show()
+            print("[DEBUG] Webview recreated and shown via hotkey")
             pollTimer = hs.timer.doEvery(0.1, checkButtonClicks)
+            print("[DEBUG] Poll timer restarted (100ms)")
         end
     end
 end
 
-local function closeWindow()
-    if webview then
+-- Toggle autoclicker with a single hotkey (works even if GUI is closed)
+local function toggleAutoclickerHotkey()
+    if timer then
+        print("[DEBUG] Hotkey: toggling OFF")
         stopPressing()
-        if pollTimer then pollTimer:stop() end
-        webview:delete()
-        webview = nil
-        pollTimer = nil
-    end
-end
-
-local function startWithKeybind()
-    if webview and webview:isVisible() then
+    else
+        print("[DEBUG] Hotkey: toggling ON")
         startPressing()
-    end
-end
-
-local function stopWithKeybind()
-    if webview and webview:isVisible() then
-        stopPressing()
     end
 end
 
@@ -450,17 +454,9 @@ end
 -- Cmd+Shift+K to toggle the window
 hs.hotkey.bind({"cmd", "shift"}, "K", toggleWindow)
 
--- Cmd+Shift+Q to close the window
-hs.hotkey.bind({"cmd", "shift"}, "Q", closeWindow)
-
--- Cmd+Shift+S to start the autoclicker
-hs.hotkey.bind({"cmd", "shift"}, "S", startWithKeybind)
-
--- Cmd+Shift+X to stop the autoclicker
-hs.hotkey.bind({"cmd", "shift"}, "X", stopWithKeybind)
+-- Ctrl+Shift+S to toggle the autoclicker
+hs.hotkey.bind({"ctrl", "shift"}, "S", toggleAutoclickerHotkey)
 
 print("Auto Key Presser loaded with keybinds:")
 print("  Cmd+Shift+K: Toggle window")
-print("  Cmd+Shift+Q: Close window")
-print("  Cmd+Shift+S: Start autoclicker")
-print("  Cmd+Shift+X: Stop autoclicker")
+print("  Ctrl+Shift+S: Toggle autoclicker ON/OFF")
