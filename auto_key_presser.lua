@@ -40,16 +40,6 @@ local function stopPressing()
     webview:evaluateJavaScript("document.getElementById('status').innerText='Stopped'")
 end
 
-local function togglePause()
-    if not timer then return end
-    paused = not paused
-    if paused then
-        webview:evaluateJavaScript("document.getElementById('status').innerText='Paused'")
-    else
-        webview:evaluateJavaScript("document.getElementById('status').innerText='Running'")
-    end
-end
-
 -- Function to save settings
 local function saveSettings()
     webview:evaluateJavaScript([[
@@ -99,8 +89,6 @@ local function checkButtonClicks()
                 startPressing()
             elseif result == "stop" then 
                 stopPressing()
-            elseif result == "toggle" then 
-                togglePause()
             elseif result == "close" then 
                 stopPressing()
                 if pollTimer then pollTimer:stop() end
@@ -198,7 +186,6 @@ input[type="number"], select {
     appearance: none; /* Makes select cleaner */
 }
 
-
 .button-group {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -219,20 +206,12 @@ button {
     align-items: center;
     justify-content: center;
     gap: 8px;
-}
-
-.btn-save {
-    background: linear-gradient(135deg, #667eea, #764ba2);
-    color: white;
+    flex-direction: column;
+    text-align: center;
 }
 
 .btn-start {
     background: linear-gradient(135deg, #56ab2f, #a8e6cf);
-    color: white;
-}
-
-.btn-toggle {
-    background: linear-gradient(135deg, #f093fb, #f5576c);
     color: white;
 }
 
@@ -254,6 +233,12 @@ button:hover {
 
 button:active {
     transform: translateY(0);
+}
+
+.keybind {
+    font-size: 11px;
+    opacity: 0.8;
+    margin-top: 4px;
 }
 
 .status-container {
@@ -330,11 +315,18 @@ input[type="number"]::placeholder {
     </div>
     
     <div class="button-group">
-        <button class="btn-save" onclick="window.buttonClicked='save'; console.log('Save clicked')">💾 Save</button>
-        <button class="btn-start" onclick="window.buttonClicked='start'; console.log('Start clicked')">▶️ Start</button>
-        <button class="btn-toggle" onclick="window.buttonClicked='toggle'; console.log('Toggle clicked')">⏯️ Toggle</button>
-        <button class="btn-stop" onclick="window.buttonClicked='stop'; console.log('Stop clicked')">⏹️ Stop</button>
-        <button class="btn-close" onclick="window.buttonClicked='close'; console.log('Close clicked')">❌ Close</button>
+        <button class="btn-start" onclick="window.buttonClicked='start'; console.log('Start clicked')">
+            ▶️ Start
+            <div class="keybind">⌘⇧S</div>
+        </button>
+        <button class="btn-stop" onclick="window.buttonClicked='stop'; console.log('Stop clicked')">
+            ⏹️ Stop
+            <div class="keybind">⌘⇧X</div>
+        </button>
+        <button class="btn-close" onclick="window.buttonClicked='close'; console.log('Close clicked')">
+            ❌ Close
+            <div class="keybind">⌘⇧Q</div>
+        </button>
     </div>
     
     <div class="status-container">
