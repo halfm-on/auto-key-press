@@ -21,9 +21,46 @@ local function pressKey()
         print("[DEBUG] Reached target count; stopped timer")
         return
     end
+    
     local app = settings.app and settings.app ~= "" and hs.application.find(settings.app) or hs.application.frontmostApplication()
     print("[DEBUG] Pressing key:", settings.key, "target app:", settings.app ~= "" and settings.app or "frontmost")
-    hs.eventtap.keyStroke({}, settings.key, 0, app)
+    print("[DEBUG] App found:", app and "YES" or "NO", "App name:", app and app:name() or "NONE")
+    
+    -- Try different approaches for better game compatibility
+    if settings.app and settings.app ~= "" and app then
+        -- Method 1: Create more realistic key events for games
+        local keyCode = hs.keycodes.map[settings.key]
+        if keyCode then
+            -- Create key down and key up events like real keyboard input
+            local keyDownEvent = hs.eventtap.event.newKeyEvent({}, settings.key, true)
+            local keyUpEvent = hs.eventtap.event.newKeyEvent({}, settings.key, false)
+            
+            -- Send to the specific app
+            keyDownEvent:post(app)
+            hs.timer.usleep(50000) -- 50ms delay between down and up
+            keyUpEvent:post(app)
+        else
+            -- Fallback to keyStroke
+            hs.eventtap.keyStroke({}, settings.key, 0, app)
+        end
+    else
+        -- Method 2: Send globally (like MurGaa might do)
+        local keyCode = hs.keycodes.map[settings.key]
+        if keyCode then
+            -- Create key down and key up events like real keyboard input
+            local keyDownEvent = hs.eventtap.event.newKeyEvent({}, settings.key, true)
+            local keyUpEvent = hs.eventtap.event.newKeyEvent({}, settings.key, false)
+            
+            -- Send globally
+            keyDownEvent:post()
+            hs.timer.usleep(50000) -- 50ms delay between down and up
+            keyUpEvent:post()
+        else
+            -- Fallback to keyStroke
+            hs.eventtap.keyStroke({}, settings.key, 0)
+        end
+    end
+    
     pressesDone = pressesDone + 1
     print("[DEBUG] pressesDone=", pressesDone)
 end
@@ -47,7 +84,7 @@ local function stopPressing()
     paused=false
     if webview then 
         webview:evaluateJavaScript("document.getElementById('status').innerText='Stopped'")
-        webview:evaluateJavaScript("document.getElementById('toggleBtn').innerText='▶️ Start (Ctrl+Shift+S)'")
+        webview:evaluateJavaScript("document.getElementById('toggleBtn').innerText='▶️ Start/Stop (Ctrl+Shift+S)'")
         webview:evaluateJavaScript("document.getElementById('toggleBtn').className='btn-toggle'")
     end
     print("[DEBUG] Stopped autoclicker")
@@ -70,14 +107,74 @@ local function getOpenApplications()
     local apps = {}
     local runningApps = hs.application.runningApplications()
     
+    -- List of major apps to include (add more as needed)
+    local majorApps = {
+        "Google Chrome", "Safari", "Firefox", "Microsoft Edge", "Opera",
+        "Spotify", "Apple Music", "iTunes",
+        "TextEdit", "Pages", "Microsoft Word", "Google Docs",
+        "Xcode", "Visual Studio Code", "Cursor", "Sublime Text", "Atom",
+        "Terminal", "iTerm2", "Hyper",
+        "Finder", "System Preferences", "System Settings",
+        "Mail", "Messages", "Slack", "Discord", "Zoom", "Teams",
+        "Photoshop", "Illustrator", "Figma", "Sketch",
+        "Steam", "Epic Games Launcher", "Battle.net", "Roblox", "AdobeLightroom",
+        "Preview", "QuickTime Player", "VLC", "IINA", "Code"
+    }
+    
+    -- Create a set for faster lookup
+    local majorAppsSet = {}
+    for _, appName in ipairs(majorApps) do
+        majorAppsSet[appName] = true
+    end
+    
+    -- First, add major apps that are running
     for _, app in pairs(runningApps) do
-        if app:name() then
+        if app:name() and majorAppsSet[app:name()] then
             table.insert(apps, app:name())
+        end
+    end
+    
+    -- Then, add any other running apps that might be renamed versions of major apps
+    for _, app in pairs(runningApps) do
+        if app:name() and not majorAppsSet[app:name()] then
+            -- Check if it's a game or major application by looking at bundle ID or other properties
+            local bundleID = app:bundleID()
+            if bundleID then
+                -- Only add specific apps we want, not all Apple system apps
+                if string.find(bundleID, "com.roblox") or 
+                   string.find(bundleID, "com.spotify") or
+                   string.find(bundleID, "com.hnc.Discord") or
+                   string.find(bundleID, "com.microsoft.VSCode") or
+                   string.find(bundleID, "com.todesktop.230313mzl4w4u92") then
+                    -- Filter out helper/plugin processes
+                    if not string.find(app:name(), "Helper") and 
+                       not string.find(app:name(), "Plugin") and
+                       not string.find(app:name(), "Renderer") and
+                       not string.find(app:name(), "fileWatcher") and
+                       not string.find(app:name(), "shared%-process") and
+                       not string.find(app:name(), "terminal pty%-host") then
+                        print("[DEBUG] Adding app: " .. app:name() .. " (matched bundle ID)")
+                        table.insert(apps, app:name())
+                    end
+                end
+            end
         end
     end
     
     -- Sort alphabetically
     table.sort(apps)
+    
+    -- If no apps were found, include all running apps as fallback
+    if #apps == 0 then
+        print("[DEBUG] No major apps found, including all running apps")
+        for _, app in pairs(runningApps) do
+            if app:name() then
+                table.insert(apps, app:name())
+            end
+        end
+        table.sort(apps)
+    end
+    
     return apps
 end
 
@@ -85,8 +182,38 @@ end
 local function populateAppDropdown()
     if not webview then return end
     
+    -- Debug: Show ALL running applications first
+    print("[DEBUG] ALL running applications:")
+    local allRunningApps = hs.application.runningApplications()
+    for _, app in pairs(allRunningApps) do
+        if app:name() then
+            print("  - " .. app:name() .. " (Bundle ID: " .. (app:bundleID() or "none") .. ")")
+        end
+    end
+    
     local openApps = getOpenApplications()
     local options = '<option value="">Frontmost App</option>'
+    
+    -- Debug: Print all detected apps
+    print("[DEBUG] Filtered applications:")
+    for _, appName in ipairs(openApps) do
+        print("  - " .. appName)
+    end
+    
+    -- If Roblox is not in the filtered list, add it manually
+    local hasRoblox = false
+    for _, appName in ipairs(openApps) do
+        if appName == "Roblox" then
+            hasRoblox = true
+            break
+        end
+    end
+    
+    if not hasRoblox then
+        print("[DEBUG] Roblox not found in filtered list, adding it manually")
+        table.insert(openApps, "Roblox")
+        table.sort(openApps)
+    end
     
     for _, appName in ipairs(openApps) do
         local selected = (appName == settings.app) and ' selected' or ''
@@ -96,6 +223,11 @@ local function populateAppDropdown()
     webview:evaluateJavaScript([[
         var appSelect = document.getElementById('app');
         appSelect.innerHTML = ']] .. options .. [[';
+        
+        // Preserve the current selection after repopulating
+        if (']] .. (settings.app or "") .. [[') {
+            appSelect.value = ']] .. (settings.app or "") .. [[';
+        }
     ]])
 end
 
@@ -103,16 +235,25 @@ end
 local function saveSettings()
     print("[DEBUG] Saving settings (manual or auto)")
     webview:evaluateJavaScript([[
+        var keyValue = document.getElementById('key').value;
+        var countValue = document.getElementById('count').value;
+        var intervalValue = document.getElementById('interval').value;
+        var unitValue = document.getElementById('unit').value;
+        var appValue = document.getElementById('app').value;
+        
+        console.log('Form values:', {key: keyValue, count: countValue, interval: intervalValue, unit: unitValue, app: appValue});
+        
         JSON.stringify({
-            key: document.getElementById('key').value,
-            count: document.getElementById('count').value,
-            interval: document.getElementById('interval').value,
-            unit: document.getElementById('unit').value,
-            app: document.getElementById('app').value
+            key: keyValue,
+            count: countValue,
+            interval: intervalValue,
+            unit: unitValue,
+            app: appValue
         })
     ]], function(jsonResult)
         local success, data = pcall(hs.json.decode, jsonResult)
         if success and data then
+            print("[DEBUG] Raw settings data:", jsonResult)
             settings.key = data.key or "a"
             settings.count = tonumber(data.count) or 0
             settings.interval = tonumber(data.interval) or 1
@@ -128,7 +269,7 @@ local function saveSettings()
                 print("[DEBUG] Updated running timer with new interval(s)=", intervalToSeconds())
             end
         else
-            print("[DEBUG] Error parsing settings JSON")
+            print("[DEBUG] Error parsing settings JSON:", jsonResult)
         end
     end)
 end
@@ -149,6 +290,8 @@ local function checkButtonClicks()
                 else
                     startPressing()
                 end
+            elseif result == "save" then
+                saveSettings()
             elseif result == "refresh" then
                 populateAppDropdown()
             end
@@ -321,7 +464,60 @@ input[type="number"]::placeholder {
     
     <div class="form-group">
         <label for="key">Key to Press</label>
-        <input type="text" id="key" value="a" maxlength="1" placeholder="Enter single key">
+        <select id="key">
+            <option value="a" selected>a</option>
+            <option value="b">b</option>
+            <option value="c">c</option>
+            <option value="d">d</option>
+            <option value="e">e</option>
+            <option value="f">f</option>
+            <option value="g">g</option>
+            <option value="h">h</option>
+            <option value="i">i</option>
+            <option value="j">j</option>
+            <option value="k">k</option>
+            <option value="l">l</option>
+            <option value="m">m</option>
+            <option value="n">n</option>
+            <option value="o">o</option>
+            <option value="p">p</option>
+            <option value="q">q</option>
+            <option value="r">r</option>
+            <option value="s">s</option>
+            <option value="t">t</option>
+            <option value="u">u</option>
+            <option value="v">v</option>
+            <option value="w">w</option>
+            <option value="x">x</option>
+            <option value="y">y</option>
+            <option value="z">z</option>
+            <option value="space">Space</option>
+            <option value="tab">Tab</option>
+            <option value="return">Enter</option>
+            <option value="escape">Escape</option>
+            <option value="delete">Delete</option>
+            <option value="forwarddelete">Forward Delete</option>
+            <option value="up">Up Arrow</option>
+            <option value="down">Down Arrow</option>
+            <option value="left">Left Arrow</option>
+            <option value="right">Right Arrow</option>
+            <option value="home">Home</option>
+            <option value="end">End</option>
+            <option value="pageup">Page Up</option>
+            <option value="pagedown">Page Down</option>
+            <option value="f1">F1</option>
+            <option value="f2">F2</option>
+            <option value="f3">F3</option>
+            <option value="f4">F4</option>
+            <option value="f5">F5</option>
+            <option value="f6">F6</option>
+            <option value="f7">F7</option>
+            <option value="f8">F8</option>
+            <option value="f9">F9</option>
+            <option value="f10">F10</option>
+            <option value="f11">F11</option>
+            <option value="f12">F12</option>
+        </select>
     </div>
     
     <div class="form-group">
@@ -357,7 +553,7 @@ input[type="number"]::placeholder {
     </div>
     
     <div class="button-group">
-        <button class="btn-toggle" id="toggleBtn" onclick="window.buttonClicked='toggle'; console.log('Toggle clicked')">▶️ Start (Ctrl+Shift+S)</button>
+        <button class="btn-toggle" id="toggleBtn" onclick="window.buttonClicked='toggle'; console.log('Toggle clicked')">▶️ Start/Stop (Ctrl+Shift+S)</button>
     </div>
     
     <div class="status-container">
@@ -379,11 +575,11 @@ function triggerAutoSave() {
         clearTimeout(autoSaveTimer);
     }
     
-    // Set new timer to auto-save after 1 second of no changes
+    // Set new timer to auto-save after 100ms of no changes
     autoSaveTimer = setTimeout(function() {
         window.buttonClicked = 'save';
         console.log('Auto-saving settings...');
-    }, 1000);
+    }, 100); // Much faster auto-save
 }
 
 // Add event listeners for auto-save
@@ -393,8 +589,14 @@ document.addEventListener('DOMContentLoaded', function() {
     inputs.forEach(function(inputId) {
         const element = document.getElementById(inputId);
         if (element) {
-            element.addEventListener('input', triggerAutoSave);
-            element.addEventListener('change', triggerAutoSave);
+            element.addEventListener('input', function() {
+                console.log('Input changed:', inputId, element.value);
+                triggerAutoSave();
+            });
+            element.addEventListener('change', function() {
+                console.log('Change event:', inputId, element.value);
+                triggerAutoSave();
+            });
         }
     });
 });
@@ -425,7 +627,19 @@ webview = hs.webview.new({x=200,y=200,w=480,h=580})
 print("[DEBUG] Webview created and shown")
 
 -- Populate app dropdown after webview is created
-hs.timer.doAfter(0.1, populateAppDropdown)
+hs.timer.doAfter(0.1, function()
+    populateAppDropdown()
+    -- Load current settings into the form
+    if webview then
+        webview:evaluateJavaScript([[
+            document.getElementById('key').value = ']] .. (settings.key or "a") .. [[';
+            document.getElementById('count').value = ']] .. (settings.count or 0) .. [[';
+            document.getElementById('interval').value = ']] .. (settings.interval or 1) .. [[';
+            document.getElementById('unit').value = ']] .. (settings.unit or "seconds") .. [[';
+            // App will be set by populateAppDropdown
+        ]])
+    end
+end)
 
 -- Start polling for button clicks every 100ms
 pollTimer = hs.timer.doEvery(0.1, checkButtonClicks)
