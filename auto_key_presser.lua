@@ -105,76 +105,90 @@ end
 -- Function to get list of open applications
 local function getOpenApplications()
     local apps = {}
+    local seenByBundle = {}
+    local seenByName = {}
+
+    -- Fast exclusion matcher
+    local function isExcluded(name, bundleID)
+        if bundleID == "org.hammerspoon.Hammerspoon" then return true end
+        if not name then return true end
+        return name:find("Helper") or name:find("Renderer") or name:find("GPU Process") or
+               name:find("Crashpad") or name:find("Web Content") or name:find("UIService") or
+               name:find("UIViewService") or name:find("Daemon") or name:find("Notification")
+    end
+
     local runningApps = hs.application.runningApplications()
-    
-    -- List of major apps to include (add more as needed)
-    local majorApps = {
-        "Google Chrome", "Safari", "Firefox", "Microsoft Edge", "Opera",
-        "Spotify", "Apple Music", "iTunes",
-        "TextEdit", "Pages", "Microsoft Word", "Google Docs",
-        "Xcode", "Visual Studio Code", "Cursor", "Sublime Text", "Atom",
-        "Terminal", "iTerm2", "Hyper",
-        "Finder", "System Preferences", "System Settings",
-        "Mail", "Messages", "Slack", "Discord", "Zoom", "Teams",
-        "Photoshop", "Illustrator", "Figma", "Sketch",
-        "Steam", "Epic Games Launcher", "Battle.net", "Roblox", "AdobeLightroom",
-        "Preview", "QuickTime Player", "VLC", "IINA", "Code"
-    }
-    
-    -- Create a set for faster lookup
-    local majorAppsSet = {}
-    for _, appName in ipairs(majorApps) do
-        majorAppsSet[appName] = true
-    end
-    
-    -- First, add major apps that are running
-    for _, app in pairs(runningApps) do
-        if app:name() and majorAppsSet[app:name()] then
-            table.insert(apps, app:name())
-        end
-    end
-    
-    -- Then, add any other running apps that might be renamed versions of major apps
-    for _, app in pairs(runningApps) do
-        if app:name() and not majorAppsSet[app:name()] then
-            -- Check if it's a game or major application by looking at bundle ID or other properties
-            local bundleID = app:bundleID()
-            if bundleID then
-                -- Only add specific apps we want, not all Apple system apps
-                if string.find(bundleID, "com.roblox") or 
-                   string.find(bundleID, "com.spotify") or
-                   string.find(bundleID, "com.hnc.Discord") or
-                   string.find(bundleID, "com.microsoft.VSCode") or
-                   string.find(bundleID, "com.todesktop.230313mzl4w4u92") then
-                    -- Filter out helper/plugin processes
-                    if not string.find(app:name(), "Helper") and 
-                       not string.find(app:name(), "Plugin") and
-                       not string.find(app:name(), "Renderer") and
-                       not string.find(app:name(), "fileWatcher") and
-                       not string.find(app:name(), "shared%-process") and
-                       not string.find(app:name(), "terminal pty%-host") then
-                        print("[DEBUG] Adding app: " .. app:name() .. " (matched bundle ID)")
-                        table.insert(apps, app:name())
+    for _, app in ipairs(runningApps) do
+        local name = app:name()
+        local bundleID = app:bundleID() or ""
+        if name and name ~= "" and not isExcluded(name, bundleID) then
+            local hidden = false
+            pcall(function() hidden = app:isHidden() end)
+            if not hidden then
+                local hasActiveWindow = false
+                local wins = nil
+                pcall(function() wins = app:allWindows() end)
+                if wins then
+                    for i = 1, #wins do
+                        local w = wins[i]
+                        local notMin = true
+                        local looksLikeWindow = false
+                        pcall(function() notMin = not w:isMinimized() end)
+                        if notMin then
+                            -- Cheaper checks first
+                            local std = false
+                            local fs = false
+                            local title = nil
+                            pcall(function() std = w:isStandard() end)
+                            pcall(function() fs = w:isFullScreen() end)
+                            if std or fs then
+                                looksLikeWindow = true
+                            else
+                                pcall(function() title = w:title() end)
+                                looksLikeWindow = title and title ~= ""
+                            end
+                            if looksLikeWindow then
+                                hasActiveWindow = true
+                                break
+                            end
+                        end
+                    end
+                end
+                if hasActiveWindow then
+                    if (bundleID ~= "" and not seenByBundle[bundleID]) or (bundleID == "" and not seenByName[name]) then
+                        table.insert(apps, name)
+                        if bundleID ~= "" then
+                            seenByBundle[bundleID] = true
+                        else
+                            seenByName[name] = true
+                        end
                     end
                 end
             end
         end
     end
-    
-    -- Sort alphabetically
-    table.sort(apps)
-    
-    -- If no apps were found, include all running apps as fallback
-    if #apps == 0 then
-        print("[DEBUG] No major apps found, including all running apps")
-        for _, app in pairs(runningApps) do
-            if app:name() then
-                table.insert(apps, app:name())
+
+    -- Fallback if very few detected: add non-hidden running apps (still excluding helpers)
+    if #apps < 5 then
+        local seen = {}
+        for _, app in ipairs(runningApps) do
+            local name = app:name()
+            local bundleID = app:bundleID() or ""
+            if name and name ~= "" and not isExcluded(name, bundleID) then
+                local hidden = false
+                pcall(function() hidden = app:isHidden() end)
+                if not hidden then
+                    local key = bundleID ~= "" and bundleID or name
+                    if not seen[key] then
+                        table.insert(apps, name)
+                        seen[key] = true
+                    end
+                end
             end
         end
-        table.sort(apps)
     end
-    
+
+    table.sort(apps)
     return apps
 end
 
@@ -182,38 +196,10 @@ end
 local function populateAppDropdown()
     if not webview then return end
     
-    -- Debug: Show ALL running applications first
-    print("[DEBUG] ALL running applications:")
-    local allRunningApps = hs.application.runningApplications()
-    for _, app in pairs(allRunningApps) do
-        if app:name() then
-            print("  - " .. app:name() .. " (Bundle ID: " .. (app:bundleID() or "none") .. ")")
-        end
-    end
-    
     local openApps = getOpenApplications()
     local options = '<option value="">Frontmost App</option>'
     
-    -- Debug: Print all detected apps
-    print("[DEBUG] Filtered applications:")
-    for _, appName in ipairs(openApps) do
-        print("  - " .. appName)
-    end
-    
-    -- If Roblox is not in the filtered list, add it manually
-    local hasRoblox = false
-    for _, appName in ipairs(openApps) do
-        if appName == "Roblox" then
-            hasRoblox = true
-            break
-        end
-    end
-    
-    if not hasRoblox then
-        print("[DEBUG] Roblox not found in filtered list, adding it manually")
-        table.insert(openApps, "Roblox")
-        table.sort(openApps)
-    end
+    -- Only show currently running applications (from visible windows + frontmost)
     
     for _, appName in ipairs(openApps) do
         local selected = (appName == settings.app) and ' selected' or ''
@@ -626,24 +612,65 @@ webview = hs.webview.new({x=200,y=200,w=480,h=580})
     :show()
 print("[DEBUG] Webview created and shown")
 
--- Populate app dropdown after webview is created
-hs.timer.doAfter(0.1, function()
-    populateAppDropdown()
-    -- Load current settings into the form
-    if webview then
-        webview:evaluateJavaScript([[
-            document.getElementById('key').value = ']] .. (settings.key or "a") .. [[';
-            document.getElementById('count').value = ']] .. (settings.count or 0) .. [[';
-            document.getElementById('interval').value = ']] .. (settings.interval or 1) .. [[';
-            document.getElementById('unit').value = ']] .. (settings.unit or "seconds") .. [[';
-            // App will be set by populateAppDropdown
-        ]])
-    end
+-- Populate app dropdown after webview is ready (no manual refresh needed)
+local uiInitPollTimer = nil
+uiInitPollTimer = hs.timer.doEvery(0.08, function()
+    if not webview then return end
+    webview:evaluateJavaScript("document.readyState", function(state)
+        if state == "complete" or state == "interactive" then
+            -- Ensure the DOM exists before populating/selecting
+            -- Defer initial population slightly to let UI paint
+            hs.timer.doAfter(0.25, populateAppDropdown)
+            if webview then
+                webview:evaluateJavaScript([[\
+                    (function(){\
+                        var k=document.getElementById('key'); if(k){k.value=']] .. (settings.key or "a") .. [[';}\
+                        var c=document.getElementById('count'); if(c){c.value=']] .. (settings.count or 0) .. [[';}\
+                        var i=document.getElementById('interval'); if(i){i.value=']] .. (settings.interval or 1) .. [[';}\
+                        var u=document.getElementById('unit'); if(u){u.value=']] .. (settings.unit or "seconds") .. [[';}\
+                        return true;\
+                    })();
+                ]])
+            end
+            if uiInitPollTimer then uiInitPollTimer:stop() uiInitPollTimer = nil end
+            print("[DEBUG] UI initialized after DOM became ready")
+        end
+    end)
 end)
 
 -- Start polling for button clicks every 100ms
 pollTimer = hs.timer.doEvery(0.1, checkButtonClicks)
 print("[DEBUG] Poll timer started (100ms)")
+
+-- Lightweight periodic refresh of app list (avoids startup lag from windowFilter)
+local lastAppListKey = ""
+local appListDirty = true
+
+-- Watch for app lifecycle changes to mark list dirty (cheap)
+local appWatcher = hs.application.watcher.new(function(appName, eventType, app)
+    if eventType == hs.application.watcher.launched or
+       eventType == hs.application.watcher.terminated or
+       eventType == hs.application.watcher.hidden or
+       eventType == hs.application.watcher.unhidden or
+       eventType == hs.application.watcher.activated then
+        appListDirty = true
+    end
+end)
+appWatcher:start()
+
+hs.timer.doAfter(0.5, function()
+    hs.timer.doEvery(1.0, function()
+        if not webview then return end
+        if not appListDirty then return end
+        appListDirty = false
+        local list = getOpenApplications()
+        local key = table.concat(list, "\0")
+        if key ~= lastAppListKey then
+            lastAppListKey = key
+            populateAppDropdown()
+        end
+    end)
+end)
 
 -- Keybind functions
 local function toggleWindow()
@@ -654,6 +681,8 @@ local function toggleWindow()
         if webview then
             webview:show()
             print("[DEBUG] Window shown via hotkey")
+            -- Refresh app list shortly after showing the window
+            hs.timer.doAfter(0.2, populateAppDropdown)
         else
             -- Recreate webview if it was closed
             webview = hs.webview.new({x=200,y=200,w=480,h=580})
@@ -666,7 +695,8 @@ local function toggleWindow()
             print("[DEBUG] Webview recreated and shown via hotkey")
             pollTimer = hs.timer.doEvery(0.1, checkButtonClicks)
             print("[DEBUG] Poll timer restarted (100ms)")
-            hs.timer.doAfter(0.1, populateAppDropdown)
+            -- Ensure the UI initializes without manual refresh when recreated
+            hs.timer.doAfter(0.2, populateAppDropdown)
         end
     end
 end
