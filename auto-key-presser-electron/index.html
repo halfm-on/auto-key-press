@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Auto Key Presser</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', Helvetica, Arial, sans-serif; 
+            padding: 0;
+            margin: 0;
+            background: #f8f9fa;
+            min-height: 100vh;
+        }
+
+        .container {
+            background: white;
+            padding: 30px;
+            width: 100%;
+            height: 100vh;
+            box-sizing: border-box;
+        }
+
+        h2 {
+            text-align: center;
+            margin-bottom: 25px;
+            color: #2c3e50;
+            font-weight: 600;
+            font-size: 24px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 6px;
+            font-weight: 500;
+            color: #34495e;
+            font-size: 14px;
+        }
+
+        input[type="text"], input[type="number"], select {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e1e8ed;
+            border-radius: 10px;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            background: white;
+        }
+
+        input[type="text"]:focus, input[type="number"]:focus, select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .interval-group {
+            display: flex;
+            gap: 10px;
+            align-items: flex-end;
+        }
+
+        .interval-input, .interval-unit {
+            flex: 1;
+        }
+
+        button {
+            padding: 12px 20px;
+            border: none;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            width: 100%;
+            margin-bottom: 10px;
+        }
+
+        .btn-toggle {
+            background: linear-gradient(135deg, #868e96, #6c757d);
+            color: white;
+        }
+
+        .btn-toggle.running {
+            background: linear-gradient(135deg, #e74c3c, #c0392b);
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+        }
+
+        .status-container {
+            text-align: center;
+            padding: 15px;
+            background: rgba(102, 126, 234, 0.1);
+            border-radius: 10px;
+            border: 1px solid rgba(102, 126, 234, 0.2);
+        }
+
+        .status {
+            font-weight: 700;
+            font-size: 16px;
+            color: #667eea;
+        }
+
+        .refresh-btn {
+            padding: 8px 12px;
+            background: #6c757d;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            width: auto;
+            margin: 0;
+        }
+
+        .app-row {
+            display: flex;
+            gap: 10px;
+            align-items: flex-end;
+        }
+
+        .app-select {
+            flex: 1;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>⌨️ Auto Key Presser</h2>
+        
+        <div class="form-group">
+            <label for="key">Key to Press</label>
+            <select id="key">
+                <option value="a" selected>a</option>
+                <option value="b">b</option>
+                <option value="c">c</option>
+                <option value="d">d</option>
+                <option value="e">e</option>
+                <option value="f">f</option>
+                <option value="g">g</option>
+                <option value="space">Space</option>
+                <option value="tab">Tab</option>
+                <option value="return">Enter</option>
+                <option value="up">Up Arrow</option>
+                <option value="down">Down Arrow</option>
+                <option value="left">Left Arrow</option>
+                <option value="right">Right Arrow</option>
+                <option value="f1">F1</option>
+                <option value="f2">F2</option>
+                <option value="f3">F3</option>
+                <option value="f4">F4</option>
+                <option value="f5">F5</option>
+            </select>
+        </div>
+        
+        <div class="form-group">
+            <label for="count">Press Count</label>
+            <input type="number" id="count" value="0" min="0" placeholder="0 = infinite">
+        </div>
+        
+        <div class="form-group">
+            <label>Interval</label>
+            <div class="interval-group">
+                <div class="interval-input">
+                    <input type="number" id="interval" value="1" min="0.001" step="0.001" placeholder="1">
+                </div>
+                <div class="interval-unit">
+                    <select id="unit">
+                        <option value="seconds" selected>Seconds</option>
+                        <option value="milliseconds">Milliseconds</option>
+                        <option value="minutes">Minutes</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+        
+        <div class="form-group">
+            <label for="app">Target Application</label>
+            <div class="app-row">
+                <select id="app" class="app-select">
+                    <option value="">Frontmost App</option>
+                </select>
+                <button class="refresh-btn" onclick="refreshApps()">🔄</button>
+            </div>
+        </div>
+        
+        <button class="btn-toggle" id="toggleBtn" onclick="toggleAutoclicker()">▶️ Start</button>
+        
+        <div class="status-container">
+            <div class="status-label">Status</div>
+            <div id="status" class="status">Stopped</div>
+        </div>
+    </div>
+
+    <script>
+        const { ipcRenderer } = require('electron');
+        
+        let autoSaveTimer = null;
+
+        function saveSettings() {
+            const settings = {
+                key: document.getElementById('key').value,
+                count: parseInt(document.getElementById('count').value) || 0,
+                interval: parseFloat(document.getElementById('interval').value) || 1,
+                unit: document.getElementById('unit').value,
+                app: document.getElementById('app').value
+            };
+            
+            ipcRenderer.send('save-settings', settings);
+        }
+
+        function triggerAutoSave() {
+            if (autoSaveTimer) clearTimeout(autoSaveTimer);
+            autoSaveTimer = setTimeout(saveSettings, 100);
+        }
+
+        function toggleAutoclicker() {
+            saveSettings();
+            ipcRenderer.send('toggle-autoclicker');
+        }
+
+        function refreshApps() {
+            ipcRenderer.send('get-running-apps');
+        }
+
+        // Auto-save on input changes
+        ['key', 'count', 'interval', 'unit', 'app'].forEach(id => {
+            const element = document.getElementById(id);
+            element.addEventListener('input', triggerAutoSave);
+            element.addEventListener('change', triggerAutoSave);
+        });
+
+        // IPC listeners
+        ipcRenderer.on('update-ui', (event, data) => {
+            document.getElementById('status').textContent = data.status;
+            document.getElementById('toggleBtn').textContent = data.buttonText;
+            document.getElementById('toggleBtn').className = `btn-toggle ${data.buttonClass}`;
+        });
+
+        ipcRenderer.on('running-apps', (event, apps) => {
+            const select = document.getElementById('app');
+            const currentValue = select.value;
+            
+            select.innerHTML = '<option value="">Frontmost App</option>';
+            
+            apps.forEach(app => {
+                const option = document.createElement('option');
+                option.value = app;
+                option.textContent = app;
+                select.appendChild(option);
+            });
+            
+            select.value = currentValue;
+        });
+
+        // Load apps on startup
+        window.addEventListener('DOMContentLoaded', () => {
+            refreshApps();
+        });
+    </script>
+</body>
+</html>
