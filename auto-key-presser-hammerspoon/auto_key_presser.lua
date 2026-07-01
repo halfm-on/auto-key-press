@@ -1,10 +1,9 @@
 local timer = nil
-local settings = {key="a", count=0, interval=1, unit="seconds", app="TextEdit"}
+local settings = {key="a", count=0, interval=1, unit="seconds", app="TextEdit", holdDuration=50}
 local pressesDone = 0
 local paused = false
 local pollTimer = nil
 
--- Convert interval to seconds
 local function intervalToSeconds()
     if settings.unit=="milliseconds" then return settings.interval/1000
     elseif settings.unit=="minutes" then return settings.interval*60
@@ -21,46 +20,35 @@ local function pressKey()
         print("[DEBUG] Reached target count; stopped timer")
         return
     end
-    
+
     local app = settings.app and settings.app ~= "" and hs.application.find(settings.app) or hs.application.frontmostApplication()
-    print("[DEBUG] Pressing key:", settings.key, "target app:", settings.app ~= "" and settings.app or "frontmost")
-    print("[DEBUG] App found:", app and "YES" or "NO", "App name:", app and app:name() or "NONE")
-    
-    -- Try different approaches for better game compatibility
+    local holdUs = (settings.holdDuration or 50) * 1000  -- ms to microseconds
+    print("[DEBUG] Pressing key:", settings.key, "hold(ms):", settings.holdDuration)
+
     if settings.app and settings.app ~= "" and app then
-        -- Method 1: Create more realistic key events for games
         local keyCode = hs.keycodes.map[settings.key]
         if keyCode then
-            -- Create key down and key up events like real keyboard input
             local keyDownEvent = hs.eventtap.event.newKeyEvent({}, settings.key, true)
             local keyUpEvent = hs.eventtap.event.newKeyEvent({}, settings.key, false)
-            
-            -- Send to the specific app
             keyDownEvent:post(app)
-            hs.timer.usleep(50000) -- 50ms delay between down and up
+            hs.timer.usleep(holdUs)
             keyUpEvent:post(app)
         else
-            -- Fallback to keyStroke
             hs.eventtap.keyStroke({}, settings.key, 0, app)
         end
     else
-        -- Method 2: Send globally (like MurGaa might do)
         local keyCode = hs.keycodes.map[settings.key]
         if keyCode then
-            -- Create key down and key up events like real keyboard input
             local keyDownEvent = hs.eventtap.event.newKeyEvent({}, settings.key, true)
             local keyUpEvent = hs.eventtap.event.newKeyEvent({}, settings.key, false)
-            
-            -- Send globally
             keyDownEvent:post()
-            hs.timer.usleep(50000) -- 50ms delay between down and up
+            hs.timer.usleep(holdUs)
             keyUpEvent:post()
         else
-            -- Fallback to keyStroke
             hs.eventtap.keyStroke({}, settings.key, 0)
         end
     end
-    
+
     pressesDone = pressesDone + 1
     print("[DEBUG] pressesDone=", pressesDone)
 end
@@ -70,7 +58,7 @@ local function startPressing()
     pressesDone=0
     paused=false
     timer=hs.timer.doEvery(intervalToSeconds(), pressKey)
-    if webview then 
+    if webview then
         webview:evaluateJavaScript("document.getElementById('status').innerText='Running'")
         webview:evaluateJavaScript("document.getElementById('toggleBtn').innerText='⏹️ Stop (Ctrl+Shift+S)'")
         webview:evaluateJavaScript("document.getElementById('toggleBtn').className='btn-toggle running'")
@@ -82,7 +70,7 @@ local function stopPressing()
     if timer then timer:stop() end
     timer=nil
     paused=false
-    if webview then 
+    if webview then
         webview:evaluateJavaScript("document.getElementById('status').innerText='Stopped'")
         webview:evaluateJavaScript("document.getElementById('toggleBtn').innerText='▶️ Start/Stop (Ctrl+Shift+S)'")
         webview:evaluateJavaScript("document.getElementById('toggleBtn').className='btn-toggle'")
@@ -102,13 +90,11 @@ local function togglePause()
     end
 end
 
--- Function to get list of open applications
 local function getOpenApplications()
     local apps = {}
     local seenByBundle = {}
     local seenByName = {}
 
-    -- Fast exclusion matcher
     local function isExcluded(name, bundleID)
         if bundleID == "org.hammerspoon.Hammerspoon" then return true end
         if not name then return true end
@@ -135,7 +121,6 @@ local function getOpenApplications()
                         local looksLikeWindow = false
                         pcall(function() notMin = not w:isMinimized() end)
                         if notMin then
-                            -- Cheaper checks first
                             local std = false
                             local fs = false
                             local title = nil
@@ -157,18 +142,14 @@ local function getOpenApplications()
                 if hasActiveWindow then
                     if (bundleID ~= "" and not seenByBundle[bundleID]) or (bundleID == "" and not seenByName[name]) then
                         table.insert(apps, name)
-                        if bundleID ~= "" then
-                            seenByBundle[bundleID] = true
-                        else
-                            seenByName[name] = true
-                        end
+                        if bundleID ~= "" then seenByBundle[bundleID] = true
+                        else seenByName[name] = true end
                     end
                 end
             end
         end
     end
 
-    -- Fallback if very few detected: add non-hidden running apps (still excluding helpers)
     if #apps < 5 then
         local seen = {}
         for _, app in ipairs(runningApps) do
@@ -192,63 +173,54 @@ local function getOpenApplications()
     return apps
 end
 
--- Function to populate app dropdown
 local function populateAppDropdown()
     if not webview then return end
-    
+
     local openApps = getOpenApplications()
     local options = '<option value="">Frontmost App</option>'
-    
-    -- Only show currently running applications (from visible windows + frontmost)
-    
+
     for _, appName in ipairs(openApps) do
         local selected = (appName == settings.app) and ' selected' or ''
         options = options .. '<option value="' .. appName .. '"' .. selected .. '>' .. appName .. '</option>'
     end
-    
+
     webview:evaluateJavaScript([[
         var appSelect = document.getElementById('app');
         appSelect.innerHTML = ']] .. options .. [[';
-        
-        // Preserve the current selection after repopulating
         if (']] .. (settings.app or "") .. [[') {
             appSelect.value = ']] .. (settings.app or "") .. [[';
         }
     ]])
 end
 
--- Function to save settings
 local function saveSettings()
-    print("[DEBUG] Saving settings (manual or auto)")
+    print("[DEBUG] Saving settings")
     webview:evaluateJavaScript([[
-        var keyValue = document.getElementById('key').value;
+        var keyValue = document.getElementById('key').value.trim();
         var countValue = document.getElementById('count').value;
         var intervalValue = document.getElementById('interval').value;
         var unitValue = document.getElementById('unit').value;
         var appValue = document.getElementById('app').value;
-        
-        console.log('Form values:', {key: keyValue, count: countValue, interval: intervalValue, unit: unitValue, app: appValue});
-        
+        var holdValue = document.getElementById('holdDuration').value;
         JSON.stringify({
             key: keyValue,
             count: countValue,
             interval: intervalValue,
             unit: unitValue,
-            app: appValue
+            app: appValue,
+            holdDuration: holdValue
         })
     ]], function(jsonResult)
         local success, data = pcall(hs.json.decode, jsonResult)
         if success and data then
-            print("[DEBUG] Raw settings data:", jsonResult)
-            settings.key = data.key or "a"
+            settings.key = (data.key and data.key ~= "") and data.key or "a"
             settings.count = tonumber(data.count) or 0
             settings.interval = tonumber(data.interval) or 1
             settings.unit = data.unit or "seconds"
             settings.app = data.app or ""
-            print("[DEBUG] Settings saved:", "key=" .. settings.key, "count=" .. settings.count, "interval=" .. settings.interval, "unit=" .. settings.unit, "app=" .. settings.app)
+            settings.holdDuration = tonumber(data.holdDuration) or 50
+            print("[DEBUG] Settings saved: key=" .. settings.key .. " hold=" .. settings.holdDuration .. "ms")
             if webview then webview:evaluateJavaScript("document.getElementById('status').innerText='Settings Auto-Saved'") end
-            
-            -- If currently running, restart with new interval
             if timer then
                 timer:stop()
                 timer = hs.timer.doEvery(intervalToSeconds(), pressKey)
@@ -260,22 +232,14 @@ local function saveSettings()
     end)
 end
 
--- Function to check for button clicks by polling
 local function checkButtonClicks()
     if not webview then return end
-    
     webview:evaluateJavaScript("window.buttonClicked || ''", function(result)
         if result and result ~= "" then
             print("[DEBUG] Button clicked:", result)
-            -- Clear the flag
             webview:evaluateJavaScript("window.buttonClicked = ''")
-            
-            if result == "toggle" then 
-                if timer then
-                    stopPressing()
-                else
-                    startPressing()
-                end
+            if result == "toggle" then
+                if timer then stopPressing() else startPressing() end
             elseif result == "save" then
                 saveSettings()
             elseif result == "refresh" then
@@ -289,91 +253,70 @@ local html = [[
 <html>
 <head>
 <style>
-* {
-    box-sizing: border-box;
-}
-
-body { 
-    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', Helvetica, Arial, sans-serif; 
-    padding: 0;
-    margin: 0;
+* { box-sizing: border-box; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', Helvetica, Arial, sans-serif;
+    padding: 0; margin: 0;
     background: #f8f9fa;
     min-height: 100vh;
 }
-
 .container {
     background: white;
-    padding: 30px;
-    width: 100%;
-    height: 100vh;
+    padding: 24px 30px 30px;
+    width: 100%; height: 100vh;
     box-sizing: border-box;
+    overflow-y: auto;
 }
-
 h2 {
     text-align: center;
-    margin-bottom: 25px;
+    margin-bottom: 22px;
     color: #2c3e50;
     font-weight: 600;
-    font-size: 24px;
+    font-size: 22px;
 }
-
-.form-group {
-    margin-bottom: 20px;
-}
-
+.form-group { margin-bottom: 18px; }
 label {
     display: block;
-    margin-bottom: 6px;
+    margin-bottom: 5px;
     font-weight: 500;
     color: #34495e;
-    font-size: 14px;
+    font-size: 13px;
 }
-
+.hint {
+    display: block;
+    font-size: 11px;
+    color: #95a5a6;
+    margin-top: 3px;
+}
 input[type="text"], input[type="number"], select {
     width: 100%;
-    padding: 12px 16px;
+    padding: 10px 14px;
     border: 2px solid #e1e8ed;
     border-radius: 10px;
-    font-size: 16px;
-    transition: all 0.3s ease;
+    font-size: 15px;
+    transition: all 0.2s ease;
     background: white;
+    color: #2c3e50;
 }
-
 input[type="text"]:focus, input[type="number"]:focus, select:focus {
     outline: none;
     border-color: #667eea;
-    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+    box-shadow: 0 0 0 3px rgba(102,126,234,0.1);
 }
-
-.interval-group {
+.row {
     display: flex;
     gap: 10px;
     align-items: flex-end;
 }
-
-.interval-input, .interval-unit {
-    flex: 1;
-}
-
-input[type="number"], select {
-    width: 100%;
-    height: 44px; /* Ensures same height */
-    padding: 10px 14px;
-    border: 2px solid #e1e8ed;
-    border-radius: 10px;
-    font-size: 16px;
-    appearance: none; /* Makes select cleaner */
-}
-
-
+.row > * { flex: 1; }
+.row .narrow { flex: 0 0 auto; }
 .button-group {
     display: flex;
     flex-direction: column;
     gap: 10px;
-    margin-top: 25px;
-    margin-bottom: 20px;
+    margin-top: 22px;
+    margin-bottom: 18px;
 }
-
 button {
     padding: 12px 20px;
     border: none;
@@ -381,245 +324,161 @@ button {
     font-size: 14px;
     font-weight: 600;
     cursor: pointer;
-    transition: all 0.3s ease;
+    transition: all 0.2s ease;
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 8px;
 }
-
-.btn-toggle {
-    background: linear-gradient(135deg, #868e96, #6c757d);
-    color: white;
-}
-
-.btn-toggle.running {
-    background: linear-gradient(135deg, #6c757d, #495057);
-}
-
-button:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
-}
-
-button:active {
-    transform: translateY(0);
-}
-
+.btn-toggle { background: linear-gradient(135deg, #868e96, #6c757d); color: white; }
+.btn-toggle.running { background: linear-gradient(135deg, #6c757d, #495057); }
+button:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,0,0,0.12); }
+button:active { transform: translateY(0); }
 .status-container {
     text-align: center;
-    padding: 15px;
-    background: rgba(102, 126, 234, 0.1);
+    padding: 14px;
+    background: rgba(102,126,234,0.08);
     border-radius: 10px;
-    border: 1px solid rgba(102, 126, 234, 0.2);
+    border: 1px solid rgba(102,126,234,0.18);
 }
-
-.status-label {
-    font-size: 14px;
-    color: #34495e;
-    margin-bottom: 5px;
+.status-label { font-size: 13px; color: #34495e; margin-bottom: 4px; }
+.status { font-weight: 700; font-size: 15px; color: #667eea; }
+.key-input-wrap { position: relative; }
+.key-badge {
+    display: inline-block;
+    background: #f0f0f0;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    padding: 1px 7px;
+    font-family: monospace;
+    font-size: 12px;
+    color: #444;
+    margin: 2px 2px 0 0;
+    cursor: pointer;
+    user-select: none;
 }
-
-.status {
-    font-weight: 700;
-    font-size: 16px;
-    color: #667eea;
-}
-
-.status.running {
-    color: #56ab2f;
-}
-
-.status.paused {
-    color: #f5576c;
-}
-
-.status.stopped {
-    color: #ee5a24;
-}
-
-input[type="text"]::placeholder,
-input[type="number"]::placeholder {
-    color: #95a5a6;
-}
+.key-badge:hover { background: #dde; border-color: #667eea; color: #667eea; }
+.keys-hint { margin-top: 6px; line-height: 2; }
 </style>
 </head>
 <body>
 <div class="container">
     <h2>⌨️ Auto Key Presser</h2>
-    
+
     <div class="form-group">
-        <label for="key">Key to Press</label>
-        <select id="key">
-            <option value="a" selected>a</option>
-            <option value="b">b</option>
-            <option value="c">c</option>
-            <option value="d">d</option>
-            <option value="e">e</option>
-            <option value="f">f</option>
-            <option value="g">g</option>
-            <option value="h">h</option>
-            <option value="i">i</option>
-            <option value="j">j</option>
-            <option value="k">k</option>
-            <option value="l">l</option>
-            <option value="m">m</option>
-            <option value="n">n</option>
-            <option value="o">o</option>
-            <option value="p">p</option>
-            <option value="q">q</option>
-            <option value="r">r</option>
-            <option value="s">s</option>
-            <option value="t">t</option>
-            <option value="u">u</option>
-            <option value="v">v</option>
-            <option value="w">w</option>
-            <option value="x">x</option>
-            <option value="y">y</option>
-            <option value="z">z</option>
-            <option value="space">Space</option>
-            <option value="tab">Tab</option>
-            <option value="return">Enter</option>
-            <option value="escape">Escape</option>
-            <option value="delete">Delete</option>
-            <option value="forwarddelete">Forward Delete</option>
-            <option value="up">Up Arrow</option>
-            <option value="down">Down Arrow</option>
-            <option value="left">Left Arrow</option>
-            <option value="right">Right Arrow</option>
-            <option value="home">Home</option>
-            <option value="end">End</option>
-            <option value="pageup">Page Up</option>
-            <option value="pagedown">Page Down</option>
-            <option value="f1">F1</option>
-            <option value="f2">F2</option>
-            <option value="f3">F3</option>
-            <option value="f4">F4</option>
-            <option value="f5">F5</option>
-            <option value="f6">F6</option>
-            <option value="f7">F7</option>
-            <option value="f8">F8</option>
-            <option value="f9">F9</option>
-            <option value="f10">F10</option>
-            <option value="f11">F11</option>
-            <option value="f12">F12</option>
-        </select>
-    </div>
-    
-    <div class="form-group">
-        <label for="count">Press Count</label>
-        <input type="number" id="count" value="0" min="0" placeholder="0 = infinite">
-    </div>
-    
-    <div class="form-group">
-        <label>Interval</label>
-        <div class="interval-group">
-            <div class="interval-input">
-                <input type="number" id="interval" value="1" min="0.001" step="0.001" placeholder="1">
-            </div>
-            <div class="interval-unit">
-                <select id="unit">
-                    <option value="seconds" selected>Seconds</option>
-                    <option value="milliseconds">Milliseconds</option>
-                    <option value="minutes">Minutes</option>
-                </select>
-            </div>
+        <label for="key">Key to press</label>
+        <div class="key-input-wrap">
+            <input type="text" id="key" value="a" maxlength="20" placeholder="e.g. a, space, f5, up, return">
+        </div>
+        <div class="keys-hint">
+            <span class="key-badge" onclick="setKey('space')">space</span>
+            <span class="key-badge" onclick="setKey('return')">return</span>
+            <span class="key-badge" onclick="setKey('escape')">escape</span>
+            <span class="key-badge" onclick="setKey('tab')">tab</span>
+            <span class="key-badge" onclick="setKey('delete')">delete</span>
+            <span class="key-badge" onclick="setKey('up')">up</span>
+            <span class="key-badge" onclick="setKey('down')">down</span>
+            <span class="key-badge" onclick="setKey('left')">left</span>
+            <span class="key-badge" onclick="setKey('right')">right</span>
+            <span class="key-badge" onclick="setKey('f1')">f1</span>
+            <span class="key-badge" onclick="setKey('f5')">f5</span>
+            <span class="key-badge" onclick="setKey('f12')">f12</span>
         </div>
     </div>
-    
+
     <div class="form-group">
-        <label for="app">Target Application</label>
-        <div style="display: flex; gap: 10px; align-items: center;">
-            <select id="app" style="flex: 1;">
+        <div class="row">
+            <div>
+                <label for="holdDuration">Hold duration (ms)</label>
+                <input type="number" id="holdDuration" value="50" min="1" max="60000" step="1" placeholder="50">
+            </div>
+            <div>
+                <label for="count">Press count</label>
+                <input type="number" id="count" value="0" min="0" placeholder="0 = infinite">
+            </div>
+        </div>
+        <span class="hint">Hold duration: how long the key is held down each press. 50ms feels natural; go higher to simulate a long-press.</span>
+    </div>
+
+    <div class="form-group">
+        <label>Interval between presses</label>
+        <div class="row">
+            <input type="number" id="interval" value="1" min="0.001" step="0.001" placeholder="1">
+            <select id="unit" style="flex: 0 0 140px;">
+                <option value="seconds" selected>Seconds</option>
+                <option value="milliseconds">Milliseconds</option>
+                <option value="minutes">Minutes</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="form-group">
+        <label for="app">Target application</label>
+        <div class="row">
+            <select id="app">
                 <option value="">Frontmost App</option>
                 <option value="TextEdit" selected>TextEdit</option>
             </select>
-            <button onclick="window.buttonClicked='refresh'; console.log('Refresh clicked')" style="padding: 8px 12px; background: #6c757d; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 12px;">🔄</button>
+            <button onclick="window.buttonClicked='refresh'" style="flex: 0 0 auto; padding: 8px 12px; background: #6c757d; color: white; border-radius: 8px; font-size: 13px;">🔄</button>
         </div>
     </div>
-    
+
     <div class="button-group">
-        <button class="btn-toggle" id="toggleBtn" onclick="window.buttonClicked='toggle'; console.log('Toggle clicked')">▶️ Start/Stop (Ctrl+Shift+S)</button>
+        <button class="btn-toggle" id="toggleBtn" onclick="window.buttonClicked='toggle'">▶️ Start/Stop (Ctrl+Shift+S)</button>
     </div>
-    
+
     <div class="status-container">
         <div class="status-label">Status</div>
-        <div id="status" class="status stopped">Stopped</div>
+        <div id="status" class="status">Stopped</div>
     </div>
 </div>
 
 <script>
 window.buttonClicked = '';
-console.log('Page loaded and ready');
 
-// Auto-save functionality
-let autoSaveTimer = null;
-
-function triggerAutoSave() {
-    // Clear existing timer
-    if (autoSaveTimer) {
-        clearTimeout(autoSaveTimer);
-    }
-    
-    // Set new timer to auto-save after 100ms of no changes
-    autoSaveTimer = setTimeout(function() {
-        window.buttonClicked = 'save';
-        console.log('Auto-saving settings...');
-    }, 100); // Much faster auto-save
+function setKey(k) {
+    var el = document.getElementById('key');
+    el.value = k;
+    el.dispatchEvent(new Event('change'));
 }
 
-// Add event listeners for auto-save
+var autoSaveTimer = null;
+function triggerAutoSave() {
+    if (autoSaveTimer) clearTimeout(autoSaveTimer);
+    autoSaveTimer = setTimeout(function() {
+        window.buttonClicked = 'save';
+    }, 100);
+}
+
 document.addEventListener('DOMContentLoaded', function() {
-    const inputs = ['key', 'count', 'interval', 'unit', 'app'];
-    
-    inputs.forEach(function(inputId) {
-        const element = document.getElementById(inputId);
-        if (element) {
-            element.addEventListener('input', function() {
-                console.log('Input changed:', inputId, element.value);
-                triggerAutoSave();
-            });
-            element.addEventListener('change', function() {
-                console.log('Change event:', inputId, element.value);
-                triggerAutoSave();
-            });
+    var inputs = ['key', 'count', 'interval', 'unit', 'app', 'holdDuration'];
+    inputs.forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) {
+            el.addEventListener('input', triggerAutoSave);
+            el.addEventListener('change', triggerAutoSave);
         }
     });
 });
-
-// Update status classes
-function updateStatus(newStatus) {
-    const statusEl = document.getElementById('status');
-    statusEl.className = 'status ' + newStatus.toLowerCase().replace(/[^a-z]/g, '');
-    statusEl.innerText = newStatus;
-}
-
-// Override the status updates to use the new function
-const originalEvaluateJavaScript = window.evaluateJavaScript;
 </script>
 </body>
 </html>
 ]]
 
--- Create webview
-webview = hs.webview.new({x=200,y=200,w=480,h=580})
+webview = hs.webview.new({x=200,y=200,w=480,h=620})
     :windowStyle({"titled","closable","resizable"})
     :windowTitle("Auto Key Presser")
     :allowTextEntry(true)
     :html(html)
     :level(hs.drawing.windowLevels.normal)
-    -- :behaviorAsLabels({"canJoinAllSpaces"}) --> makes it appear on all spaces
     :show()
 print("[DEBUG] Webview created and shown")
 
--- Populate app dropdown after webview is ready (no manual refresh needed)
 local uiInitPollTimer = nil
 uiInitPollTimer = hs.timer.doEvery(0.08, function()
     if not webview then return end
     webview:evaluateJavaScript("document.readyState", function(state)
         if state == "complete" or state == "interactive" then
-            -- Ensure the DOM exists before populating/selecting
-            -- Defer initial population slightly to let UI paint
             hs.timer.doAfter(0.25, populateAppDropdown)
             if webview then
                 webview:evaluateJavaScript([[\
@@ -628,25 +487,23 @@ uiInitPollTimer = hs.timer.doEvery(0.08, function()
                         var c=document.getElementById('count'); if(c){c.value=']] .. (settings.count or 0) .. [[';}\
                         var i=document.getElementById('interval'); if(i){i.value=']] .. (settings.interval or 1) .. [[';}\
                         var u=document.getElementById('unit'); if(u){u.value=']] .. (settings.unit or "seconds") .. [[';}\
+                        var h=document.getElementById('holdDuration'); if(h){h.value=']] .. (settings.holdDuration or 50) .. [[';}\
                         return true;\
                     })();
                 ]])
             end
             if uiInitPollTimer then uiInitPollTimer:stop() uiInitPollTimer = nil end
-            print("[DEBUG] UI initialized after DOM became ready")
+            print("[DEBUG] UI initialized")
         end
     end)
 end)
 
--- Start polling for button clicks every 100ms
 pollTimer = hs.timer.doEvery(0.1, checkButtonClicks)
-print("[DEBUG] Poll timer started (100ms)")
+print("[DEBUG] Poll timer started")
 
--- Lightweight periodic refresh of app list (avoids startup lag from windowFilter)
 local lastAppListKey = ""
 local appListDirty = true
 
--- Watch for app lifecycle changes to mark list dirty (cheap)
 local appWatcher = hs.application.watcher.new(function(appName, eventType, app)
     if eventType == hs.application.watcher.launched or
        eventType == hs.application.watcher.terminated or
@@ -672,53 +529,34 @@ hs.timer.doAfter(0.5, function()
     end)
 end)
 
--- Keybind functions
 local function toggleWindow()
     if webview and webview:isVisible() then
         webview:hide()
-        print("[DEBUG] Window hidden via hotkey")
     else
         if webview then
             webview:show()
-            print("[DEBUG] Window shown via hotkey")
-            -- Refresh app list shortly after showing the window
             hs.timer.doAfter(0.2, populateAppDropdown)
         else
-            -- Recreate webview if it was closed
-            webview = hs.webview.new({x=200,y=200,w=480,h=580})
+            webview = hs.webview.new({x=200,y=200,w=480,h=620})
                 :windowStyle({"titled","closable","resizable"})
                 :windowTitle("Auto Key Presser")
                 :allowTextEntry(true)
                 :html(html)
                 :level(hs.drawing.windowLevels.normal)
                 :show()
-            print("[DEBUG] Webview recreated and shown via hotkey")
             pollTimer = hs.timer.doEvery(0.1, checkButtonClicks)
-            print("[DEBUG] Poll timer restarted (100ms)")
-            -- Ensure the UI initializes without manual refresh when recreated
             hs.timer.doAfter(0.2, populateAppDropdown)
         end
     end
 end
 
--- Toggle autoclicker with a single hotkey (works even if GUI is closed)
 local function toggleAutoclickerHotkey()
-    if timer then
-        print("[DEBUG] Hotkey: toggling OFF")
-        stopPressing()
-    else
-        print("[DEBUG] Hotkey: toggling ON")
-        startPressing()
-    end
+    if timer then stopPressing() else startPressing() end
 end
 
--- Set up keybinds
--- Cmd+Shift+K to toggle the window
 hs.hotkey.bind({"cmd", "shift"}, "K", toggleWindow)
-
--- Ctrl+Shift+S to toggle the autoclicker
 hs.hotkey.bind({"ctrl", "shift"}, "S", toggleAutoclickerHotkey)
 
-print("Auto Key Presser loaded with keybinds:")
+print("Auto Key Presser loaded:")
 print("  Cmd+Shift+K: Toggle window")
 print("  Ctrl+Shift+S: Toggle autoclicker ON/OFF")
